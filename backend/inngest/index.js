@@ -1,5 +1,9 @@
 import { Inngest } from "inngest";
-import { User } from "../models/Users"; 
+import connectDB from "../configs/db.js";
+import User from "../models/Users.js";
+
+// ✅ Ensure DB connection before using any function
+await connectDB();
 
 // Create Inngest client
 export const inngest = new Inngest({ id: "movie-ticket-booking" });
@@ -19,9 +23,7 @@ const syncUserCreation = inngest.createFunction(
     };
 
     await User.create(userData);
-
-    // ✅ Return something
-    return { status: "user created" };
+    return { status: "✅ User created successfully" };
   }
 );
 
@@ -32,7 +34,7 @@ const syncUserDeletion = inngest.createFunction(
   async ({ event }) => {
     const { id } = event.data;
     await User.findByIdAndDelete(id);
-    return { status: "user deleted" };
+    return { status: "✅ User deleted successfully" };
   }
 );
 
@@ -50,11 +52,8 @@ const syncUserUpdation = inngest.createFunction(
     };
 
     await User.findByIdAndUpdate(id, userData);
-
-    
-    return { status: "user updated" };
+    return { status: "✅ User updated successfully" };
   }
 );
 
-// Export all functions
 export const functions = [syncUserCreation, syncUserDeletion, syncUserUpdation];
