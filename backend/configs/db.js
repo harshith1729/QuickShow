@@ -10,7 +10,7 @@ const connectDB = async () => {
 
   try {
     await mongoose.connect(process.env.MONGODB_URI, {
-      dbName: 'users', // ✅ database name
+      dbName: 'quickshow', // ✅ database name
     });
     isConnected = true;
     console.log('✅ Database connected successfully');
