@@ -10,31 +10,33 @@ import bookingRouter from './routes/bookingRoutes.js';
 import adminRouter from './routes/adminRoutes.js';
 import userRouter from './routes/userRoutes.js';
 import { stripeWebhooks } from './controllers/stripeWebhooks.js';
-// Remove this line - you're not using showController in server.js
-// import showController from './controllers/showController.js';
 
 const app = express();
 const port = 3000;
 
-//Connect to DB before starting the server
 await connectDB();
 
-// Stripe webhooks route 
-app.use('/api/stripe',express.raw({ type : 'application/json'}),stripeWebhooks)
+// ⭐ MUST BE FIRST
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  stripeWebhooks
+);
 
+// ⭐ all other middleware must come AFTER
 app.use(express.json());
 app.use(cors());
 app.use(clerkMiddleware());
-// API Routes
+
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
+
 app.use('/api/inngest', serve({ client: inngest, functions }));
 app.use('/api/show', showRouter);
-app.use('/api/booking',bookingRouter);
-app.use('/api/admin',adminRouter)
+app.use('/api/booking', bookingRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/user', userRouter);
-
 
 app.listen(port, () => {
   console.log(`🚀 Server is running on http://localhost:${port}`);
