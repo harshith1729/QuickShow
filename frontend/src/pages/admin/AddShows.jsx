@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { toast } from 'react-hot-toast';
 import Loading from '../../components/Loading';
-import Title from '../../components/admin/title';
+import Title from "../../components/admin/Title";
 import { kConverter } from '../../lib/kConverter';
 import { CheckIcon, Star, Trash2, X } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
