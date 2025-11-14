@@ -1,6 +1,7 @@
 import Booking from "../models/booking.js";
 import Show from "../models/show.js";
 import stripe from 'stripe'
+
 //function to check availability of selected seats
 const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
     try{
@@ -21,9 +22,16 @@ const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
 
 export const createBooking = async(req, res) => {
     try{
-        const {userId} = req.auth();
+        // ✅ FIX: Properly get userId from Clerk
+        const userId = req.auth?.userId;
+        
+        // Check if user is authenticated
+        if (!userId) {
+            return res.json({success: false, message: 'User not authenticated'});
+        }
+        
         const {showId, dateTimeKey, selectedSeats} = req.body;
-        const {origin} = req.headers;
+        const origin = req.headers.origin || req.headers.referer;
         
         // Validate required fields
         if (!showId || !dateTimeKey || !selectedSeats || selectedSeats.length === 0) {
@@ -47,7 +55,7 @@ export const createBooking = async(req, res) => {
         const booking = await Booking.create({
             user: userId,
             show: showId,
-            dateTimeKey: dateTimeKey, // Store which specific slot was booked
+            dateTimeKey: dateTimeKey,
             amount: showData.showPrice * selectedSeats.length,
             bookedSeats: selectedSeats,
         })
@@ -66,7 +74,7 @@ export const createBooking = async(req, res) => {
 
         await showData.save();
 
-        // Stripe gateway initialiation
+        // Stripe gateway initialization
         const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
 
         // creating line items
@@ -88,14 +96,15 @@ export const createBooking = async(req, res) => {
             mode : 'payment',
             metadata :{
                 bookingId : booking._id.toString(),
-
             },
             expires_at : Math.floor(Date.now()/1000) + 30*60 //expires in 30 min
         })
+        
         booking.paymentLink = session.url;
         await booking.save();
 
-        res.json({success:true, url : session});
+        // ✅ FIX: Return session.url instead of session object
+        res.json({success:true, url: session.url});
 
     }catch(err){
         console.log(err.message);

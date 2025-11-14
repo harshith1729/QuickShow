@@ -13,38 +13,64 @@ export const stripeWebhooks = async(req, res) => {
             process.env.STRIPE_WEBHOOK_SECRET
         );
     } catch(error) {
+        console.error('⚠️ Webhook signature verification failed:', error.message);
         return res.status(400).send(`Webhook error: ${error.message}`);
     }
     
     try {
+        console.log('📥 Received Stripe Event:', event.type);
+        console.log('📦 Event ID:', event.id);
+        
         switch (event.type) {
-            case "payment_intent.succeeded": {
-                const paymentIntent = event.data.object;
-                const sessionList = await stripeInstance.checkout.sessions.list({
-                    payment_intent: paymentIntent.id
-                });
-                const session = sessionList.data[0];
+            case "checkout.session.completed": {
+                // ✅ This fires when payment is successful
+                const session = event.data.object;
+                console.log('💳 Session Data:', session);
+                console.log('📋 Metadata:', session.metadata);
+                
                 const { bookingId } = session.metadata;
 
-                await Booking.findByIdAndUpdate(bookingId, {
-                    isPaid: true,
-                    paymentLink: ""
-                });
-                
-                console.log(`Payment succeeded for booking: ${bookingId}`);
+                if (!bookingId) {
+                    console.error('❌ No bookingId in metadata!');
+                    break;
+                }
+
+                console.log('🎫 Updating booking:', bookingId);
+
+                const updatedBooking = await Booking.findByIdAndUpdate(
+                    bookingId,
+                    {
+                        isPaid: true,
+                        paymentLink: ""
+                    },
+                    { new: true }
+                );
+
+                if (updatedBooking) {
+                    console.log('✅ Booking updated successfully!');
+                    console.log('Updated booking:', updatedBooking);
+                } else {
+                    console.error('❌ Booking not found with ID:', bookingId);
+                }
+                break;
+            }
+
+            case "payment_intent.succeeded": {
+                const paymentIntent = event.data.object;
+                console.log('💰 Payment intent succeeded:', paymentIntent.id);
                 break;
             }
         
             default:
-                console.log('Unhandled event type:', event.type);
+                console.log('ℹ️ Unhandled event type:', event.type);
         }
         
-        // Fixed: was "response" instead of "res"
-        res.json({ received: true });
+        // Always respond with 200 to acknowledge receipt
+        res.status(200).json({ received: true });
         
     } catch (error) {
-        console.log("Webhook processing error:", error);
-        // Fixed: was "response" instead of "res"
-        res.status(500).send("Internal Server error");
+        console.error("❌ Webhook processing error:", error);
+        console.error("Stack:", error.stack);
+        res.status(500).json({ error: "Webhook processing failed" });
     }
 }
