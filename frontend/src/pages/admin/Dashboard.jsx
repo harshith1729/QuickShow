@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { toast } from 'react-hot-toast';
 import Loading from '../../components/Loading';
-import Title from '../../components/admin/title';   
+import Title from "../../components/admin/Title";
 import { ChartLineIcon, CircleDollarSignIcon, PlayCircleIcon, UsersIcon, StarIcon } from 'lucide-react';  
 import BlurCircle from '../../components/BlurCircle';  
 import { dateFormat } from '../../lib/dateFormat';     
