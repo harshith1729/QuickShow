@@ -7,36 +7,70 @@ import timeFormat from '../lib/timeFormat';
 import DateSelect from '../components/DateSelect';
 import MovieCard from '../components/MoiveCard';
 import { generateDateRange } from '../lib/dateUtils';
+import { useAppContext } from '../context/AppContext';
+import toast from 'react-hot-toast';
 
 const MovieDetails = () => {
   const navigate = useNavigate();
   const { id } = useParams();
   const [show, setShow] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setIsLoading] = useState(true);
+  const [isFav, setIsFav] = useState(false);
+
+  const { shows, axios, getToken, user, fetchFavouriteMovies, favouriteMovies, image_base_url } = useAppContext();
 
   const getShow = async () => {
     try {
-      setLoading(true);
-      const foundShow = dummyShowsData.find(show => show._id === id);
-      if (foundShow) {
-        // Generate real-time dates with show times
-        const realTimeDates = generateDateRange(4, dummyDateTimeData);
-        
-        setShow({
-          movie: foundShow,
-          dateTime: realTimeDates
-        });
+      setIsLoading(true);
+      const { data } = await axios.get(`/api/show/${id}`);
+      if (data.success) {
+        setShow(data);
+      } else {
+        console.error('API returned success: false');
       }
     } catch (error) {
       console.error('Error fetching show:', error);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
+    }
+  };
+
+  const handleFavourite = async () => {
+    try {
+      if (!user) {
+        return toast.error("Please Login to Proceed");
+      }
+
+      // Toggle local state immediately
+      setIsFav(prev => !prev);
+
+      const { data } = await axios.post(
+        '/api/user/update-favourite',
+        { movieId: id },
+        { headers: { Authorization: `Bearer ${await getToken()}` } }
+      );
+
+      if (data.success) {
+        await fetchFavouriteMovies(); // sync backend data
+        toast.success(data.message || "Favorite updated successfully");
+      } else {
+        toast.error(data.message || "Failed to update favorites");
+      }
+    } catch (error) {
+      console.error('Favorite error details:', error);
+      toast.error("Something went wrong while updating favorite");
     }
   };
 
   useEffect(() => {
     getShow();
   }, [id]);
+
+  // Update isFav whenever favouriteMovies changes
+  useEffect(() => {
+    const fav = (favouriteMovies || []).some(movie => movie._id === id);
+    setIsFav(fav);
+  }, [favouriteMovies, id]);
 
   if (loading) {
     return (
@@ -49,13 +83,13 @@ const MovieDetails = () => {
     );
   }
 
-  if (!show) {
+  if (!show || !show.movie) {
     return (
       <div className='flex items-center justify-center min-h-screen'>
         <div className='text-center'>
           <p className='text-xl text-gray-400'>Movie not found</p>
-          <button 
-            onClick={() => navigate('/movies')} 
+          <button
+            onClick={() => navigate('/movies')}
             className='mt-4 px-6 py-2 bg-primary text-white rounded hover:bg-primary-dull transition'
           >
             Back to Movies
@@ -69,8 +103,8 @@ const MovieDetails = () => {
     <div className='px-6 md:px-16 lg:px-40 pt-30 md:pt-50 pb-20'>
       {/* Movie Header Section */}
       <div className='flex flex-col md:flex-row gap-8 max-w-6xl mx-auto mb-20'>
-        <img 
-          src={show.movie.poster_path} 
+        <img
+          src={image_base_url + show.movie.poster_path}
           alt={show.movie.title}
           className='max-md:mx-auto rounded-xl h-104 max-w-70 object-cover'
         />
@@ -88,21 +122,28 @@ const MovieDetails = () => {
             {show.movie.overview}
           </p>
           <p className='text-gray-300'>
-            {timeFormat(show.movie.runtime)} • {show.movie.genres.map(genre => genre.name).join(', ')} • {show.movie.release_date.split('-')[0]}
+            {timeFormat(show.movie.runtime)} • {show.movie.genres.map(genre => genre.name).join(', ')} • {(show.movie.releasedate || show.movie.release_date || '').split('-')[0]}
           </p>
           <div className='flex items-center flex-wrap gap-4 mt-4'>
             <button className='flex items-center gap-2 px-7 py-3 text-sm bg-gray-800 hover:bg-gray-900 transition rounded-md font-medium cursor-pointer active:scale-95'>
               <PlayCircleIcon className='w-5 h-5' />
               Watch Trailer
             </button>
-            <a 
-              href="#dateSelect" 
+            <a
+              href="#dateSelect"
               className='flex items-center px-7 py-3 text-sm bg-primary hover:bg-primary-dull transition rounded-md font-medium cursor-pointer'
             >
               Buy Tickets
             </a>
-            <button className='bg-gray-700 p-2.5 rounded-full transition cursor-pointer active:scale-95 hover:bg-gray-600'>
-              <Heart className='w-5 h-5' />
+            <button
+              onClick={handleFavourite}
+              className='bg-gray-700 p-2.5 rounded-full transition cursor-pointer active:scale-95 hover:bg-gray-600'
+            >
+              <Heart
+                className={`w-5 h-5 transition-all duration-200 ${
+                  isFav ? 'fill-primary text-primary' : ''
+                }`}
+              />
             </button>
           </div>
         </div>
@@ -116,14 +157,20 @@ const MovieDetails = () => {
             {show.movie.casts && show.movie.casts.slice(0, 12).map((cast, index) => (
               <div key={index} className='flex flex-col items-center text-center min-w-fit'>
                 <div className='w-20 h-20 rounded-full bg-gray-700 overflow-hidden'>
-                  <img 
-                    src={cast.profile_path || cast.profilepath || 'https://via.placeholder.com/80'} 
-                    alt={cast.name}
-                    className='w-full h-full object-cover'
-                    onError={(e) => {
-                      e.target.src = 'https://via.placeholder.com/80?text=' + cast.name.charAt(0);
-                    }}
-                  />
+                  {cast.profile_path ? (
+                    <img
+                      src={image_base_url + cast.profile_path}
+                      alt={cast.name}
+                      className='w-full h-full object-cover'
+                      onError={(e) => {
+                        e.target.src = 'https://via.placeholder.com/80?text=' + cast.name.charAt(0);
+                      }}
+                    />
+                  ) : (
+                    <div className='w-full h-full flex items-center justify-center bg-gray-600 text-white text-2xl font-bold'>
+                      {cast.name.charAt(0)}
+                    </div>
+                  )}
                 </div>
                 <p className='font-medium text-xs mt-3 max-w-20'>{cast.name}</p>
               </div>
@@ -133,13 +180,13 @@ const MovieDetails = () => {
       </div>
 
       {/* Date Selection */}
-      <DateSelect dateTime={show.dateTime} id={id} />
+      <DateSelect dateTime={generateDateRange(5)} id={id} />
 
       {/* Similar Movies Section */}
       <div className='mt-20'>
         <p className='text-lg font-medium mb-8'>You may also like</p>
         <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto'>
-          {dummyShowsData.slice(0, 4).map((movie, index) => (
+          {shows.slice(0, 4).map((movie, index) => (
             <MovieCard key={index} movie={movie} />
           ))}
         </div>
@@ -147,8 +194,8 @@ const MovieDetails = () => {
 
       {/* Show More Button */}
       <div className='flex justify-center mt-12'>
-        <button 
-          onClick={() => { navigate('/movies'); scrollTo(0, 0); }} 
+        <button
+          onClick={() => { navigate('/movies'); scrollTo(0, 0); }}
           className='px-10 py-3 text-sm bg-primary hover:bg-primary-dull transition rounded-md font-medium cursor-pointer active:scale-95'
         >
           Show more

@@ -1,6 +1,6 @@
 import { Inngest } from "inngest";
 import connectDB from "../configs/db.js";
-import User from "../models/Users.js";
+import User from "../models/users.js";
 
 // ✅ Ensure DB connection before using any function
 await connectDB();

@@ -4,20 +4,33 @@ import BlurCircle from '../components/BlurCircle';
 import timeFormat from '../lib/timeFormat';
 import { dateFormat } from '../lib/dateFormat';
 import { dummyBookingData } from '../assets/assets';
+import { useAppContext } from '../context/AppContext';
 
 const MyBookings = () => {
   const currency = import.meta.env.VITE_CURRENCY || '$';
   const [bookings, setBookings] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const {axios,getToken,user,image_base_url} = useAppContext();
 
   const getMyBookings = async () => {
-    setBookings(dummyBookingData);
+    try{
+      const {data} = await axios.get("/api/user/bookings",
+        { headers: { Authorization: `Bearer ${await getToken()}` } }
+      )
+      if(data.success){
+        setBookings(data.bookings);
+      }
+    }catch(error){
+      console.log(error);
+    }
     setIsLoading(false);
   };
 
   useEffect(() => {
-    getMyBookings();
-  }, []);
+    if(user){
+      getMyBookings();
+    }
+  }, [user]);
 
   return !isLoading ? (
     <div className='relative px-6 md:px-16 lg:px-40 pt-30 md:pt-40 pb-20 min-h-[80vh]'>
@@ -35,7 +48,7 @@ const MyBookings = () => {
             {/* Left Section - Movie Info */}
             <div className='flex flex-col md:flex-row gap-4'>
               <img 
-                src={item.show.movie.poster_path} 
+                src={image_base_url + item.show.movie.poster_path} 
                 alt={item.show.movie.title} 
                 className='w-full md:w-45 aspect-[2/3] object-cover rounded'
               />
@@ -46,7 +59,7 @@ const MyBookings = () => {
                     {timeFormat(item.show.movie.runtime)}
                   </p>
                   <p className='text-gray-400 text-sm mt-1'>
-                    {dateFormat(item.show.showDateTime)}
+                    {item.show.showDateTime ? dateFormat(item.show.showDateTime) : 'Date not available'}
                   </p>
                 </div>
                 <div className='mt-4'>
