@@ -1,0 +1,7 @@
+{
+  "build": {
+    "env": {
+      "VITE_SUPPRESS_BACKEND_BUILD": "true"
+    }
+  }
+}
