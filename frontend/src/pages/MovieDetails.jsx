@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { dummyDateTimeData, dummyShowsData } from '../assets/assets';
 import BlurCircle from '../components/BlurCircle';
 import { Heart, PlayCircleIcon, StarIcon } from 'lucide-react';
 import timeFormat from '../lib/timeFormat';
 import DateSelect from '../components/DateSelect';
 import MovieCard from '../components/MoiveCard';
-import { generateDateRange } from '../lib/dateUtils';
 import { useAppContext } from '../context/AppContext';
 import toast from 'react-hot-toast';
 
@@ -180,7 +178,7 @@ const MovieDetails = () => {
       </div>
 
       {/* Date Selection */}
-      <DateSelect dateTime={generateDateRange(5)} id={id} />
+      <DateSelect dateTime={show.dateTime || {}} id={id} />
 
       {/* Similar Movies Section */}
       <div className='mt-20'>

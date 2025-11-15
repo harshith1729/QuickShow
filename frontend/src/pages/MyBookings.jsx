@@ -1,15 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Loading from '../components/Loading';
 import BlurCircle from '../components/BlurCircle';
 import timeFormat from '../lib/timeFormat';
-import { dateFormat } from '../lib/dateFormat';
+import { parseDateTimeKey } from '../lib/dateUtils';
 import { useAppContext } from '../context/AppContext';
-import { Link } from 'react-router-dom';
+import { Clock } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 const MyBookings = () => {
-  const currency = import.meta.env.VITE_CURRENCY || '$';
+  const currency = import.meta.env.VITE_CURRENCY || '₹';
   const [bookings, setBookings] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [timeLeftMap, setTimeLeftMap] = useState({});
+  const expiredBookingsRef = useRef(new Set()); // Track which bookings we've already shown toast for
   const { axios, getToken, user, image_base_url } = useAppContext();
 
   const getMyBookings = async () => {
@@ -21,6 +24,14 @@ const MyBookings = () => {
 
       if (data.success) {
         setBookings(data.bookings);
+        // ‼️ Initialize timeLeftMap from API data
+        const initialTimeLeft = {};
+        data.bookings.forEach(booking => {
+          if (!booking.isPaid && booking.timeRemaining > 0 && booking.paymentStatus === 'pending') {
+            initialTimeLeft[booking._id] = booking.timeRemaining;
+          }
+        });
+        setTimeLeftMap(initialTimeLeft);
       }
     } catch (err) {
       console.log(err);
@@ -28,25 +39,69 @@ const MyBookings = () => {
     setIsLoading(false);
   };
 
-  // Get dateTimeKey safely
-  const getShowDateTime = (booking) => {
-    return (
-      booking.dateTimeKey ||
-      booking.show?.dateTimeKey ||
-      booking.showDateTime ||
-      booking.show?.showDateTime ||
-      booking.createdAt
-    );
+  // ⭐ Real-time countdown timer
+  useEffect(() => {
+    if (bookings.length === 0) return;
+
+    const interval = setInterval(() => {
+      const now = new Date();
+      const newTimeLeftMap = {};
+      let shouldRefresh = false;
+
+      bookings.forEach((booking) => {
+        // ‼️ Only count down for 'pending' bookings
+        if (!booking.isPaid && booking.expiresAt && booking.paymentStatus === 'pending') {
+          const timeLeft = new Date(booking.expiresAt) - now;
+          
+          if (timeLeft <= 0) {
+            newTimeLeftMap[booking._id] = 0;
+            
+            // Only show toast once per booking
+            if (!expiredBookingsRef.current.has(booking._id)) {
+              expiredBookingsRef.current.add(booking._id);
+              shouldRefresh = true; // Set flag to refresh data from API
+            }
+          } else {
+            newTimeLeftMap[booking._id] = timeLeft;
+          }
+        }
+      });
+
+      setTimeLeftMap(newTimeLeftMap);
+
+      // Refresh bookings only once when expiration detected
+      if (shouldRefresh) {
+        toast.error('Payment time expired. Please book again.');
+        getMyBookings(); // This will fetch the new 'failed' status
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [bookings]);
+
+  // Format time remaining
+  const formatTimeLeft = (milliseconds) => {
+    if (milliseconds <= 0) return 'Expired';
+    
+    const minutes = Math.floor(milliseconds / 60000);
+    const seconds = Math.floor((milliseconds % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  const getFormattedShowTime = (booking) => {
-    return (
-      booking.time ||
-      booking.showTime ||
-      booking.show?.time ||
-      booking.show?.showTime ||
-      null
-    );
+  // ⭐ Handle payment link click with expiration check
+  const handlePayNow = (booking) => {
+    const now = new Date();
+    const expiresAt = new Date(booking.expiresAt);
+    
+    // Check if booking is expired
+    if (now > expiresAt || booking.isExpired || !booking.paymentLink) {
+      toast.error('Payment time expired. Please create a new booking.');
+      getMyBookings(); // Refresh to show updated status
+      return;
+    }
+    
+    // Redirect to payment
+    window.location.href = booking.paymentLink;
   };
 
   useEffect(() => {
@@ -64,9 +119,11 @@ const MyBookings = () => {
 
       {bookings.length > 0 ? (
         bookings.map((item) => {
-          const showDateTime = getShowDateTime(item);
-          const formattedShowTime = getFormattedShowTime(item);
           const movie = item.show?.movie;
+          const { date, time } = parseDateTimeKey(item.dateTimeKey);
+          // ‼️ Get time from state map, or from API, or 0
+          const timeLeft = timeLeftMap[item._id] || (item.paymentStatus === 'pending' ? item.timeRemaining : 0);
+          const isExpiring = timeLeft > 0 && timeLeft <= 120000; // Less than 2 minutes
 
           return (
             <div
@@ -87,18 +144,12 @@ const MyBookings = () => {
                     <p className='text-gray-400 text-sm mt-1'>
                       {timeFormat(movie?.runtime)}
                     </p>
-
-                    {showDateTime && (
-                      <p className='text-gray-400 text-sm mt-1'>
-                        Date: {dateFormat(showDateTime)}
-                      </p>
-                    )}
-
-                    {formattedShowTime && (
-                      <p className='text-gray-400 text-sm mt-1'>
-                        Time: {formattedShowTime}
-                      </p>
-                    )}
+                    <p className='text-gray-400 text-sm mt-1'>
+                      Date: {date}
+                    </p>
+                    <p className='text-gray-400 text-sm mt-1'>
+                      Time: {time}
+                    </p>
                   </div>
 
                   <div className='mt-4'>
@@ -118,21 +169,31 @@ const MyBookings = () => {
                     {item.amount}
                   </p>
 
-                  {/* Payment Status */}
+                  {/* ‼️ CORRECTED Payment Status Logic */}
                   {item.isPaid ? (
+                    // ✅ Paid bookings
                     <span className='bg-green-500/20 text-green-400 px-4 py-1.5 text-sm rounded-full font-medium'>
                       Paid ✓
                     </span>
-                  ) : item.paymentLink ? (
-                    <Link
-                      to={item.paymentLink}
-                      className='bg-primary hover:bg-primary-dull px-6 py-2 text-sm rounded-full font-medium cursor-pointer transition active:scale-95'
-                    >
-                      Pay Now
-                    </Link>
+                  ) : (item.paymentStatus === 'pending' && !item.isExpired && timeLeft > 0) ? (
+                    // 🔵 Active booking with payment link (within 5 minutes)
+                    <div className='flex flex-col items-end gap-2'>
+                      <button
+                        onClick={() => handlePayNow(item)}
+                        className='bg-primary hover:bg-primary-dull px-6 py-2 text-sm rounded-full font-medium cursor-pointer transition active:scale-95'
+                      >
+                        Pay Now
+                      </button>
+                      {/* Countdown Timer */}
+                      <div className={`flex items-center gap-1 text-xs ${isExpiring ? 'text-red-400 animate-pulse' : 'text-yellow-400'}`}>
+                        <Clock size={14} />
+                        <span>Expires in: {formatTimeLeft(timeLeft)}</span>
+                      </div>
+                    </div>
                   ) : (
-                    <span className='bg-yellow-500/20 text-yellow-400 px-4 py-1.5 text-sm rounded-full font-medium'>
-                      Payment Pending
+                    // ❌ Expired or Failed booking
+                    <span className='bg-red-500/20 text-red-400 px-4 py-1.5 text-sm rounded-full font-medium'>
+                      Payment Failed
                     </span>
                   )}
                 </div>
