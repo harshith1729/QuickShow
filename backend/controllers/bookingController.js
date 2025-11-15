@@ -1,6 +1,7 @@
 import Booking from "../models/booking.js";
 import Show from "../models/show.js";
-import stripe from 'stripe'
+import stripe from 'stripe';
+import { inngest } from '../inngest/index.js'; // Import inngest client
 
 //function to check availability of selected seats
 const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
@@ -20,12 +21,102 @@ const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
     }
 }
 
-export const createBooking = async(req, res) => {
-    try{
-        // ✅ FIX: Properly get userId from Clerk
+// Function to release seats when booking is cancelled/deleted
+export const cancelBooking = async(req, res) => {
+    try {
+        const { bookingId } = req.params;
         const userId = req.auth?.userId;
         
-        // Check if user is authenticated
+        if (!userId) {
+            return res.json({success: false, message: 'User not authenticated'});
+        }
+
+        const booking = await Booking.findById(bookingId);
+        
+        if (!booking) {
+            return res.json({success: false, message: 'Booking not found'});
+        }
+
+        // Check if user owns this booking
+        if (booking.user !== userId) {
+            return res.json({success: false, message: 'Unauthorized to cancel this booking'});
+        }
+
+        // Don't allow canceling paid bookings
+        if (booking.isPaid) {
+            return res.json({success: false, message: 'Cannot cancel paid bookings'});
+        }
+
+        // Release the seats
+        const show = await Show.findById(booking.show);
+        if (show) {
+            const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
+            
+            // Remove the booked seats
+            booking.bookedSeats.forEach((seat) => {
+                delete occupiedSeatsForSlot[seat];
+            });
+            
+            show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
+            show.markModified('occupiedSeats');
+            await show.save();
+            
+            console.log(`✅ Released seats ${booking.bookedSeats.join(', ')} from show`);
+        }
+
+        // Delete the booking
+        await Booking.findByIdAndDelete(bookingId);
+
+        res.json({success: true, message: 'Booking cancelled and seats released'});
+
+    } catch(err) {
+        console.log(err.message);
+        res.json({success: false, message: 'Error cancelling booking'});
+    }
+}
+
+// Admin function to delete any booking and release seats
+export const adminDeleteBooking = async(req, res) => {
+    try {
+        const { bookingId } = req.params;
+
+        const booking = await Booking.findById(bookingId);
+        
+        if (!booking) {
+            return res.json({success: false, message: 'Booking not found'});
+        }
+
+        // Release the seats
+        const show = await Show.findById(booking.show);
+        if (show) {
+            const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
+            
+            // Remove the booked seats
+            booking.bookedSeats.forEach((seat) => {
+                delete occupiedSeatsForSlot[seat];
+            });
+            
+            show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
+            show.markModified('occupiedSeats');
+            await show.save();
+            
+            console.log(`✅ Admin released seats ${booking.bookedSeats.join(', ')} from show`);
+        }
+
+        // Delete the booking
+        await Booking.findByIdAndDelete(bookingId);
+
+        res.json({success: true, message: 'Booking deleted and seats released'});
+
+    } catch(err) {
+        console.log(err.message);
+        res.json({success: false, message: 'Error deleting booking'});
+    }
+}
+export const createBooking = async(req, res) => {
+    try{
+        const userId = req.auth?.userId;
+        
         if (!userId) {
             return res.json({success: false, message: 'User not authenticated'});
         }
@@ -33,7 +124,6 @@ export const createBooking = async(req, res) => {
         const {showId, dateTimeKey, selectedSeats} = req.body;
         const origin = req.headers.origin || req.headers.referer;
         
-        // Validate required fields
         if (!showId || !dateTimeKey || !selectedSeats || selectedSeats.length === 0) {
             return res.json({success:false, message:'Missing required booking information'});
         }
@@ -51,6 +141,9 @@ export const createBooking = async(req, res) => {
             return res.json({success:false, message:'Show not found'});
         }
 
+        // ⭐ Set expiration to 5 minutes from now
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
         //create a booking 
         const booking = await Booking.create({
             user: userId,
@@ -58,6 +151,8 @@ export const createBooking = async(req, res) => {
             dateTimeKey: dateTimeKey,
             amount: showData.showPrice * selectedSeats.length,
             bookedSeats: selectedSeats,
+            paymentStatus: 'pending',
+            expiresAt: expiresAt
         })
         
         // Get current occupied seats for this slot
@@ -103,7 +198,18 @@ export const createBooking = async(req, res) => {
         booking.paymentLink = session.url;
         await booking.save();
 
-        // ✅ FIX: Return session.url instead of session object
+        // ⭐ Schedule Inngest job to check payment after 5 minutes
+        await inngest.send({
+            name: "booking/payment.timeout",
+            data: {
+                bookingId: booking._id.toString(),
+            },
+            // Run this event after 5 minutes
+            ts: expiresAt.getTime(),
+        });
+
+        console.log(`⏰ Scheduled payment timeout check for booking ${booking._id} at ${expiresAt.toISOString()}`);
+
         res.json({success:true, url: session.url});
 
     }catch(err){

@@ -1,6 +1,8 @@
 import { Inngest } from "inngest";
 import connectDB from "../configs/db.js";
 import User from "../models/users.js";
+import Booking from "../models/booking.js";
+import Show from "../models/show.js";
 
 // ✅ Ensure DB connection before using any function
 await connectDB();
@@ -56,4 +58,72 @@ const syncUserUpdation = inngest.createFunction(
   }
 );
 
-export const functions = [syncUserCreation, syncUserDeletion, syncUserUpdation];
+// --- 4. Handle payment timeout ---
+const handlePaymentTimeout = inngest.createFunction(
+  { id: "handle-payment-timeout" },
+  { event: "booking/payment.timeout" },
+  async ({ event, step }) => {
+    const { bookingId } = event.data;
+
+    return await step.run("check-and-expire-booking", async () => {
+      console.log(`⏰ Checking payment status for booking ${bookingId}`);
+
+      const booking = await Booking.findById(bookingId);
+
+      if (!booking) {
+        console.log(`❌ Booking ${bookingId} not found`);
+        return { status: "❌ Booking not found" };
+      }
+
+      // If payment is already completed, do nothing
+      if (booking.isPaid || booking.paymentStatus === 'completed') {
+        console.log(`✅ Booking ${bookingId} already paid`);
+        return { status: "✅ Payment already completed" };
+      }
+
+      // Check if booking has expired
+      if (new Date() >= booking.expiresAt) {
+        console.log(`⏱️ Booking ${bookingId} has expired. Releasing seats...`);
+
+        // Mark booking as expired
+        booking.paymentStatus = 'expired';
+        booking.paymentLink = '';
+        await booking.save();
+
+        // Release the seats
+        const show = await Show.findById(booking.show);
+        if (show) {
+          const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
+          
+          // Remove the user's seats
+          booking.bookedSeats.forEach((seat) => {
+            delete occupiedSeatsForSlot[seat];
+          });
+          
+          show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
+          show.markModified('occupiedSeats');
+          await show.save();
+
+          console.log(`✅ Released seats ${booking.bookedSeats.join(', ')} for booking ${bookingId}`);
+        }
+
+        return { 
+          status: "✅ Booking expired and seats released",
+          bookingId: bookingId,
+          releasedSeats: booking.bookedSeats
+        };
+      }
+
+      console.log(`⏳ Booking ${bookingId} still within time limit`);
+      return { status: "⏳ Booking still valid" };
+    });
+  }
+);
+
+// Export all functions
+export const functions = [
+  syncUserCreation, 
+  syncUserDeletion, 
+  syncUserUpdation,
+  handlePaymentTimeout  // ⭐ Added new function
+];

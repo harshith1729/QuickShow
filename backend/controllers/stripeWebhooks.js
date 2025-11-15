@@ -26,7 +26,7 @@ export const stripeWebhooks = async(req, res) => {
         
         switch (event.type) {
             case "checkout.session.completed": 
-            case "payment_intent.succeeded": { // ⭐ Handle BOTH events
+            case "payment_intent.succeeded": {
                 const data = event.data.object;
                 console.log('💳 Event Data:', data);
                 console.log('📋 Metadata:', data.metadata);
@@ -45,6 +45,7 @@ export const stripeWebhooks = async(req, res) => {
                     bookingId,
                     {
                         isPaid: true,
+                        paymentStatus: 'completed', // ⭐ Update payment status
                         paymentLink: ""
                     },
                     { new: true }
