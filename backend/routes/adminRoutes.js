@@ -9,52 +9,47 @@ import {
 } from "../controllers/adminController.js";
 
 import { adminDeleteBooking } from "../controllers/bookingController.js";
-import { isAdminMiddleware } from "../middleware/auth.js";
+import { protectAdmin } from "../middleware/auth.js";
 
 const adminRouter = express.Router();
 
-// Check admin
 adminRouter.get(
   "/is-admin",
   clerkMiddleware(),
   requireAuth(),
-  isAdminMiddleware,
+  protectAdmin,
   isAdmin
 );
 
-// Dashboard stats
 adminRouter.get(
   "/dashboard",
   clerkMiddleware(),
   requireAuth(),
-  isAdminMiddleware,
+  protectAdmin,
   getDashboardData
 );
 
-// All shows
 adminRouter.get(
   "/shows",
   clerkMiddleware(),
   requireAuth(),
-  isAdminMiddleware,
+  protectAdmin,
   getAllShows
 );
 
-// All bookings
 adminRouter.get(
   "/bookings",
   clerkMiddleware(),
   requireAuth(),
-  isAdminMiddleware,
+  protectAdmin,
   getAllBookings
 );
 
-// Delete a booking (ADMIN ONLY)
 adminRouter.delete(
   "/booking/:bookingId",
   clerkMiddleware(),
   requireAuth(),
-  isAdminMiddleware,
+  protectAdmin,
   adminDeleteBooking
 );
 
