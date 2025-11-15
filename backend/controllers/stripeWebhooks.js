@@ -1,9 +1,8 @@
 import stripe from 'stripe';
 import Booking from '../models/booking.js';
-import connectDB from '../configs/db.js'; // ⭐ Add this import
+import connectDB from '../configs/db.js';
 
 export const stripeWebhooks = async(req, res) => {
-    // ⭐ Ensure DB is connected before processing webhook
     await connectDB();
     
     const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
@@ -26,15 +25,17 @@ export const stripeWebhooks = async(req, res) => {
         console.log('📦 Event ID:', event.id);
         
         switch (event.type) {
-            case "checkout.session.completed": {
-                const session = event.data.object;
-                console.log('💳 Session Data:', session);
-                console.log('📋 Metadata:', session.metadata);
+            case "checkout.session.completed": 
+            case "payment_intent.succeeded": { // ⭐ Handle BOTH events
+                const data = event.data.object;
+                console.log('💳 Event Data:', data);
+                console.log('📋 Metadata:', data.metadata);
                 
-                const { bookingId } = session.metadata;
+                const { bookingId } = data.metadata;
 
                 if (!bookingId) {
                     console.error('❌ No bookingId in metadata!');
+                    console.error('Event type:', event.type);
                     break;
                 }
 
@@ -55,12 +56,6 @@ export const stripeWebhooks = async(req, res) => {
                 } else {
                     console.error('❌ Booking not found with ID:', bookingId);
                 }
-                break;
-            }
-
-            case "payment_intent.succeeded": {
-                const paymentIntent = event.data.object;
-                console.log('💰 Payment intent succeeded:', paymentIntent.id);
                 break;
             }
         
