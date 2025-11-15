@@ -1,7 +1,11 @@
 import stripe from 'stripe';
 import Booking from '../models/booking.js';
+import connectDB from '../configs/db.js'; // ⭐ Add this import
 
 export const stripeWebhooks = async(req, res) => {
+    // ⭐ Ensure DB is connected before processing webhook
+    await connectDB();
+    
     const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
     const sig = req.headers['stripe-signature'];
 
@@ -23,7 +27,6 @@ export const stripeWebhooks = async(req, res) => {
         
         switch (event.type) {
             case "checkout.session.completed": {
-                // ✅ This fires when payment is successful
                 const session = event.data.object;
                 console.log('💳 Session Data:', session);
                 console.log('📋 Metadata:', session.metadata);
@@ -65,7 +68,6 @@ export const stripeWebhooks = async(req, res) => {
                 console.log('ℹ️ Unhandled event type:', event.type);
         }
         
-        // Always respond with 200 to acknowledge receipt
         res.status(200).json({ received: true });
         
     } catch (error) {
