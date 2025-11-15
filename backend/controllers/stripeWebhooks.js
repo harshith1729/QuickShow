@@ -26,10 +26,6 @@ export const stripeWebhooks = async(req, res) => {
         console.log('📦 Event ID:', event.id);
         
         switch (event.type) {
-            // ⭐ CORRECTION: Only listen for 'checkout.session.completed'.
-            // This event confirms payment and has the metadata you attached.
-            // The 'payment_intent.succeeded' event does not have your
-            // session metadata and would have caused an error.
             case "checkout.session.completed": {
                 const data = event.data.object;
                 console.log('💳 Event Data:', data);
@@ -49,7 +45,7 @@ export const stripeWebhooks = async(req, res) => {
                     bookingId,
                     {
                         isPaid: true,
-                        paymentStatus: 'completed', // ⭐ Update payment status
+                        paymentStatus: 'completed',
                         paymentLink: "" // Invalidate the payment link
                     },
                     { new: true }
@@ -64,9 +60,10 @@ export const stripeWebhooks = async(req, res) => {
 
                 //send conformation email
                 await inngest.send({
-                    name : "api/show.booked",
-                    data : {bookingId}
-                })
+                    // ⭐ FIX: Event name must match the trigger in index.js
+                    name: "app/show.booked", 
+                    data: { bookingId }
+                });
                 break;
             }
             
