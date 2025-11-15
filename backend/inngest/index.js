@@ -3,6 +3,8 @@ import connectDB from "../configs/db.js";
 import User from "../models/users.js";
 import Booking from "../models/booking.js";
 import Show from "../models/show.js";
+import Movie from '../models/movie.js';
+import sendEmail from "../configs/nodeMailer.js";
 
 // ✅ Ensure DB connection before using any function
 await connectDB();
@@ -58,14 +60,14 @@ const syncUserUpdation = inngest.createFunction(
   }
 );
 
-// --- 4. Handle payment timeout ---
+// --- 4. Handle payment timeout (5 minutes) - Release seats & MARK AS FAILED ---
 const handlePaymentTimeout = inngest.createFunction(
   { id: "handle-payment-timeout" },
   { event: "booking/payment.timeout" },
   async ({ event, step }) => {
     const { bookingId } = event.data;
 
-    return await step.run("check-and-expire-booking", async () => {
+    return await step.run("check-and-mark-expired-booking", async () => {
       console.log(`⏰ Checking payment status for booking ${bookingId}`);
 
       const booking = await Booking.findById(bookingId);
@@ -83,12 +85,7 @@ const handlePaymentTimeout = inngest.createFunction(
 
       // Check if booking has expired
       if (new Date() >= booking.expiresAt) {
-        console.log(`⏱️ Booking ${bookingId} has expired. Releasing seats...`);
-
-        // Mark booking as expired
-        booking.paymentStatus = 'expired';
-        booking.paymentLink = '';
-        await booking.save();
+        console.log(`⏱️ Booking ${bookingId} has expired. Releasing seats and marking as failed...`);
 
         // Release the seats
         const show = await Show.findById(booking.show);
@@ -107,8 +104,15 @@ const handlePaymentTimeout = inngest.createFunction(
           console.log(`✅ Released seats ${booking.bookedSeats.join(', ')} for booking ${bookingId}`);
         }
 
+        // ‼️ CHANGE: Update status to 'failed' instead of deleting
+        booking.paymentStatus = 'failed';
+        booking.paymentLink = null; // Invalidate the old payment link
+        await booking.save();
+        
+        console.log(`🗑️ Marked expired booking ${bookingId} as 'failed'`);
+
         return { 
-          status: "✅ Booking expired and seats released",
+          status: "✅ Booking expired, seats released, and status set to 'failed'",
           bookingId: bookingId,
           releasedSeats: booking.bookedSeats
         };
@@ -120,10 +124,39 @@ const handlePaymentTimeout = inngest.createFunction(
   }
 );
 
+// 5.Ingest function to send email when user book a show
+
+const sendBookingConformationEmail = inngest.createFunction(
+  {id : "send-booking-conformation-email"},
+  {event : "app/show.booked"},
+  async ({event,data})=>{
+    const {bookingId} = event.data;
+    const booking = await Booking.findById(bookingId).populate({
+      path : 'show',
+      populate: { path: "movie" }
+    }).populate('user');
+    await sendEmail({
+      to: booking.user.email,
+      subject: `Payment Confirmation: "${booking.show.movie.title}" booked!`,
+      body: `<div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h2>Hi ${booking.user.name},</h2>
+        <p>Your booking for <strong style="color: #F84565;">"${booking.show.movie.title}"</strong> is confirmed.</p>
+        <p>
+          <strong>Date:</strong> ${new Date(booking.show.showDateTime).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' })}<br/>
+          <strong>Time:</strong> ${new Date(booking.show.showDateTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata' })}
+        </p>
+        <p>Enjoy the show! 🍿</p>
+        <p>Thanks for booking with us!<br/>- QuickShow Team</p>
+      </div>`
+    });
+  }
+)
+
 // Export all functions
 export const functions = [
   syncUserCreation, 
   syncUserDeletion, 
   syncUserUpdation,
-  handlePaymentTimeout  // ⭐ Added new function
+  handlePaymentTimeout
 ];
+

@@ -1,6 +1,7 @@
 import stripe from 'stripe';
 import Booking from '../models/booking.js';
 import connectDB from '../configs/db.js';
+import { inngest } from '../inngest/index.js';
 
 export const stripeWebhooks = async(req, res) => {
     await connectDB();
@@ -25,8 +26,11 @@ export const stripeWebhooks = async(req, res) => {
         console.log('📦 Event ID:', event.id);
         
         switch (event.type) {
-            case "checkout.session.completed": 
-            case "payment_intent.succeeded": {
+            // ⭐ CORRECTION: Only listen for 'checkout.session.completed'.
+            // This event confirms payment and has the metadata you attached.
+            // The 'payment_intent.succeeded' event does not have your
+            // session metadata and would have caused an error.
+            case "checkout.session.completed": {
                 const data = event.data.object;
                 console.log('💳 Event Data:', data);
                 console.log('📋 Metadata:', data.metadata);
@@ -46,7 +50,7 @@ export const stripeWebhooks = async(req, res) => {
                     {
                         isPaid: true,
                         paymentStatus: 'completed', // ⭐ Update payment status
-                        paymentLink: ""
+                        paymentLink: "" // Invalidate the payment link
                     },
                     { new: true }
                 );
@@ -57,9 +61,15 @@ export const stripeWebhooks = async(req, res) => {
                 } else {
                     console.error('❌ Booking not found with ID:', bookingId);
                 }
+
+                //send conformation email
+                await inngest.send({
+                    name : "api/show.booked",
+                    data : {bookingId}
+                })
                 break;
             }
-        
+            
             default:
                 console.log('ℹ️ Unhandled event type:', event.type);
         }

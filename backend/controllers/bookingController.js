@@ -157,7 +157,7 @@ export const createBooking = async(req, res) => {
             dateTimeKey: dateTimeKey,
             amount: showData.showPrice * selectedSeats.length,
             bookedSeats: selectedSeats,
-            paymentStatus: 'pending',
+            paymentStatus: 'pending', // STATUS starts as 'pending'
             expiresAt: expiresAt
         })
         
@@ -205,7 +205,7 @@ export const createBooking = async(req, res) => {
         booking.paymentLink = session.url;
         await booking.save();
 
-        // Schedule Inngest job to check payment after 5 minutes
+        // ⭐ Schedule payment timeout check after 5 minutes
         await inngest.send({
             name: "booking/payment.timeout",
             data: {
@@ -316,15 +316,13 @@ const cleanupExpiredBookings = async(showId, dateTimeKey) => {
                 console.log(`✅ Released seats from expired bookings`);
             }
             
-            // Delete expired bookings
-            await Booking.deleteMany({
-                show: showId,
-                dateTimeKey: dateTimeKey,
-                isPaid: false,
-                expiresAt: { $lte: new Date() }
-            });
+            // ‼️ CHANGE: Update status to 'failed' instead of deleting
+            await Booking.updateMany(
+                { _id: { $in: expiredBookings.map(b => b._id) } },
+                { $set: { paymentStatus: 'failed', paymentLink: null } }
+            );
             
-            console.log(`✅ Deleted ${expiredBookings.length} expired bookings`);
+            console.log(`✅ Marked ${expiredBookings.length} expired bookings as 'failed'`);
         }
     } catch (err) {
         console.log('Error cleaning up expired bookings:', err.message);
@@ -340,57 +338,39 @@ export const getMyBookings = async(req, res) => {
             return res.json({success: false, message: 'User not authenticated'});
         }
 
-        // Clean up expired bookings first
         const now = new Date();
-        const expiredBookings = await Booking.find({
-            user: userId,
-            isPaid: false,
-            paymentStatus: 'pending',
-            expiresAt: { $lte: now }
-        });
-
-        // Release seats from expired bookings
-        for (const booking of expiredBookings) {
-            const show = await Show.findById(booking.show);
-            if (show) {
-                const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
-                
-                booking.bookedSeats.forEach((seat) => {
-                    delete occupiedSeatsForSlot[seat];
-                });
-                
-                show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
-                show.markModified('occupiedSeats');
-                await show.save();
-            }
-
-            // Mark as expired
-            booking.paymentStatus = 'expired';
-            booking.paymentLink = '';
-            await booking.save();
-        }
-
-        if (expiredBookings.length > 0) {
-            console.log(`✅ Cleaned up ${expiredBookings.length} expired bookings for user ${userId}`);
-        }
-
-        // Fetch all bookings
+        
+        // ‼️ CHANGE: Fetch ALL bookings for the user.
         const bookings = await Booking.find({ user: userId })
-            .populate({
-                path: 'show',
-                populate: {
-                    path: 'movie'
-                }
-            })
-            .sort({ createdAt: -1 });
+        .populate({
+            path: 'show',
+            populate: {
+                path: 'movie'
+            }
+        })
+        .sort({ createdAt: -1 });
+
+        // Add expiration status to each booking
+        const bookingsWithStatus = bookings.map(booking => {
+            const bookingObj = booking.toObject();
+            const isExpired = booking.expiresAt && new Date(booking.expiresAt) <= now;
+            
+            return {
+                ...bookingObj,
+                isExpired: isExpired && !booking.isPaid,
+                timeRemaining: booking.expiresAt && !booking.isPaid && !isExpired 
+                    ? Math.max(0, new Date(booking.expiresAt) - now) 
+                    : 0
+            };
+        });
 
         res.json({
             success: true,
-            bookings: bookings
+            bookings: bookingsWithStatus
         });
 
     } catch(err) {
         console.log(err.message);
         res.json({success: false, message: 'Error fetching bookings'});
     }
-}
+};
