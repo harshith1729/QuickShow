@@ -14,14 +14,15 @@ import Dashboard from './pages/admin/Dashboard';
 import AddShows from './pages/admin/AddShows';
 import ListShows from './pages/admin/ListShows';
 import ListBookings from './pages/admin/ListBookings';
-import { useAppContext } from './context/AppContext.jsx';
+import { useAppContext } from './context/AppContext.jsx'; // Correct path
 import { SignIn } from '@clerk/clerk-react';
 import Loading from './components/Loading.jsx';
+import SearchPage from './pages/SearchPage'; // Search page import
 
 const App = () => {
   const location = useLocation();
   const isAdminRoute = location.pathname.startsWith('/admin');
-  const {user} = useAppContext()
+  const { user } = useAppContext();
 
   return (
     <>
@@ -37,6 +38,7 @@ const App = () => {
         <Route path="/mybookings" element={<MyBookings />} />
         <Route path="/loading/:nextUrl" element={<Loading />} />
         <Route path="/favourite" element={<Favorite />} />
+        <Route path="/search" element={<SearchPage />} /> {/* Search page route */}
 
         {/* Admin Routes */}
         <Route path="/admin/*" element={user ? <Layout /> : (

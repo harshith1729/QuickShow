@@ -1,4 +1,4 @@
-// routes/userRoutes.js (make sure the file name is correct)
+// routes/userRoutes.js
 import express from 'express';
 import { getFavourites, getUserBookings, updateFavourite } from '../controllers/userController.js';
 

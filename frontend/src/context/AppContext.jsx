@@ -44,10 +44,9 @@ export const AppProvider = ({children}) => {
             console.error("Error fetching admin status:", err.response?.data || err.message);
             setIsAdmin(false);
             
-            // Don't show toast for 404 errors (endpoint not found)
-            if (err.response?.status !== 404) {
-                toast.error('Error fetching admin status');
-            }
+            // --- PROBLEM LINE REMOVED ---
+            // We no longer show a toast here, because a regular user
+            // "failing" this check is normal, not an error.
         }
     }
 

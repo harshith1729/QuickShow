@@ -125,11 +125,10 @@ const handlePaymentTimeout = inngest.createFunction(
 );
 
 // --- 5. Ingest function to send email when user books a show ---
-// ⭐ CORRECTION: Renamed function, fixed ID, uses step.run, and checks for null booking.
 const sendBookingConfirmationEmail = inngest.createFunction(
-  { id: "send-booking-confirmation-email" }, // ⭐ FIX: Corrected ID typo
+  { id: "send-booking-confirmation-email" },
   { event: "app/show.booked" },
-  async ({ event, step }) => { // ⭐ FIX: Correct signature
+  async ({ event, step }) => {
     const { bookingId } = event.data;
 
     return await step.run("send-confirmation-email-step", async () => {
@@ -138,19 +137,20 @@ const sendBookingConfirmationEmail = inngest.createFunction(
         populate: { path: "movie" }
       }).populate('user');
 
-      // ⭐ FIX: Add check for booking
       if (!booking) {
         console.error(`❌ Booking ${bookingId} not found for sending email.`);
         return { status: "❌ Booking not found" };
       }
 
-      // ⭐ FIX: Add check for populated data
       if (!booking.user || !booking.show || !booking.show.movie) {
         console.error(`❌ Booking ${bookingId} is missing user or show/movie data.`);
         return { status: "❌ Missing booking data" };
       }
 
       try {
+        // ⭐ FIX: Use booking.dateTimeKey to create a valid date
+        const showDate = new Date(booking.dateTimeKey);
+
         await sendEmail({
           to: booking.user.email,
           subject: `Payment Confirmation: "${booking.show.movie.title}" booked!`,
@@ -158,8 +158,8 @@ const sendBookingConfirmationEmail = inngest.createFunction(
             <h2>Hi ${booking.user.name},</h2>
             <p>Your booking for <strong style="color: #F84565;">"${booking.show.movie.title}"</strong> is confirmed.</p>
             <p>
-              <strong>Date:</strong> ${new Date(booking.show.showDateTime).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' })}<br/>
-              <strong>Time:</strong> ${new Date(booking.show.showDateTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata' })}
+              <strong>Date:</strong> ${showDate.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' })}<br/>
+              <strong>Time:</strong> ${showDate.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })}
             </p>
             <p>Enjoy the show! 🍿</p>
             <p>Thanks for booking with us!<br/>- QuickShow Team</p>
@@ -178,11 +178,148 @@ const sendBookingConfirmationEmail = inngest.createFunction(
   }
 );
 
+// --- 6. Ingest function to send show remainders ---
+// ⭐ FIX: Corrected the entire logic to query Bookings instead of Shows
+const sendShowRemainders = inngest.createFunction(
+  {id : "send-show-remainders"},
+  {cron: "0 */8 * * *"}, // execute every 8 hours (at 00:00, 08:00, 16:00 UTC)
+  async({step})=>{
+    
+    // Find all *paid* bookings in the *next* 8 hours
+    const windowStart = new Date();
+    const windowEnd = new Date(windowStart.getTime() + 8 * 60 * 60 * 1000);
+
+    // Prepare Remainder Tasks
+    const remainderTasks = await step.run("prepare-remainder-tasks", async () => {
+      const bookings = await Booking.find({
+        dateTimeKey: { 
+          $gte: windowStart.toISOString(), // Compare ISO strings
+          $lte: windowEnd.toISOString() 
+        },
+        isPaid: true // Only remind for paid bookings
+      }).populate('user').populate({ path: 'show', populate: { path: 'movie' } });
+
+      const tasks = bookings
+        .map(booking => {
+          // Ensure all data is populated
+          if (!booking.user || !booking.show || !booking.show.movie) {
+            console.warn(`Skipping reminder for booking ${booking._id}, missing data.`);
+            return null;
+          }
+          return {
+            userEmail: booking.user.email,
+            userName: booking.user.name,
+            movieTitle: booking.show.movie.title,
+            showTime: booking.dateTimeKey // This is the correct ISO date string
+          };
+        })
+        .filter(task => task !== null); // Remove any null (incomplete) tasks
+      
+      return tasks;
+    });
+
+    if (remainderTasks.length === 0) {
+      return { sent: 0, message: "No Reminders to Send" };
+    }
+
+    // Send remainder emails in parallel
+    const results = await step.run('send-all-remainders', async () => {
+      return await Promise.allSettled(
+        remainderTasks.map(task => {
+          const showDateTime = new Date(task.showTime); // Parse the ISO string
+          return sendEmail({
+            to: task.userEmail,
+            subject: `Reminder: Your movie "${task.movieTitle}" starts soon!`,
+            body: `<div style="font-family: Arial, sans-serif; padding: 20px;">
+                <h2>Hello ${task.userName},</h2>
+                <p>This is a quick reminder that your movie:</p>
+                <h3 style="color: #F84565;">"${task.movieTitle}"</h3>
+                <p>
+                    is scheduled for <strong>${showDateTime.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' })}</strong> at
+                    <strong>${showDateTime.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })}</strong>.
+                </p>
+                <p>It's starting in the next 8 hours - make sure you're ready!</p>
+                <br/>
+                <p>Enjoy the show!<br/>QuickShow Team</p>
+            </div>`
+          });
+        })
+      );
+    });
+
+    const sent = results.filter(r => r.status === "fulfilled").length;
+    const failed = results.length - sent;
+    return {
+      sent,
+      failed,
+      message: `Sent ${sent} remainder(s), ${failed} failed.`
+    };
+  }
+);
+
+// --- 7. Send new show notifications ---
+const sendNewShowNotifications = inngest.createFunction(
+  // ⭐ FIX: The key must be 'id', not 'send'
+  { id: "send-new-show-notifications" },
+  { event: "app/show.added" },
+  // ⭐ FIX: Refactored to use step.run for robustness
+  async ({ event, step }) => {
+    const { movieTitle } = event.data;
+
+    // First, get all users
+    const users = await step.run("get-all-users", async () => {
+      return User.find({}).select("name email");
+    });
+
+    if (users.length === 0) {
+      return { message: "No users to notify." };
+    }
+
+    // Create a list of email tasks
+    const tasks = users.map(user => ({
+      userEmail: user.email,
+      userName: user.name, // Will be used in the body
+    }));
+
+    // Send all emails in parallel using step.run
+    await step.run("send-notification-batch", async () => {
+      await Promise.allSettled(
+        tasks.map(task => {
+          const subject = `🎬 New Show Added: ${movieTitle}`;
+          const body = `<div style="font-family: Arial, sans-serif; padding: 20px;">
+              
+              {/* ⭐ FIX: Changed 'userName' (which was undefined) to 'task.userName' */}
+              <h2>Hi ${task.userName},</h2>
+
+              <p>We've just added a new show to our library:</p>
+              <h3 style="color: #F84565;">"${movieTitle}"</h3>
+              
+              <p>Visit our website to check it out!</p>
+              <br/>
+              <p>Thanks,<br/>QuickShow Team</p>
+          </div>`;
+          
+          return sendEmail({
+            to: task.userEmail,
+            subject,
+            body,
+          });
+        })
+      );
+    });
+
+    return { message: `Sent notifications to ${users.length} users.` };
+  }
+);
+
+
 // Export all functions
 export const functions = [
   syncUserCreation, 
   syncUserDeletion, 
   syncUserUpdation,
   handlePaymentTimeout,
-  sendBookingConfirmationEmail // ⭐ FIX: Added missing function to export array
+  sendBookingConfirmationEmail,
+  sendShowRemainders,
+  sendNewShowNotifications
 ];
