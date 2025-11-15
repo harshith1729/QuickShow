@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { dummyDateTimeData, dummyShowsData } from '../assets/assets';
 import BlurCircle from '../components/BlurCircle';
 import { Heart, PlayCircleIcon, StarIcon } from 'lucide-react';
 import timeFormat from '../lib/timeFormat';
 import DateSelect from '../components/DateSelect';
 import MovieCard from '../components/MoiveCard';
+import { generateDateRange } from '../lib/dateUtils';
 import { useAppContext } from '../context/AppContext';
 import toast from 'react-hot-toast';
 
@@ -123,7 +125,10 @@ const MovieDetails = () => {
             {timeFormat(show.movie.runtime)} • {show.movie.genres.map(genre => genre.name).join(', ')} • {(show.movie.releasedate || show.movie.release_date || '').split('-')[0]}
           </p>
           <div className='flex items-center flex-wrap gap-4 mt-4'>
-            {/* --- WATCH TRAILER BUTTON REMOVED --- */}
+            <button className='flex items-center gap-2 px-7 py-3 text-sm bg-gray-800 hover:bg-gray-900 transition rounded-md font-medium cursor-pointer active:scale-95'>
+              <PlayCircleIcon className='w-5 h-5' />
+              Watch Trailer
+            </button>
             <a
               href="#dateSelect"
               className='flex items-center px-7 py-3 text-sm bg-primary hover:bg-primary-dull transition rounded-md font-medium cursor-pointer'
@@ -175,7 +180,7 @@ const MovieDetails = () => {
       </div>
 
       {/* Date Selection */}
-      <DateSelect dateTime={show.dateTime || {}} id={id} />
+      <DateSelect dateTime={generateDateRange(5)} id={id} />
 
       {/* Similar Movies Section */}
       <div className='mt-20'>

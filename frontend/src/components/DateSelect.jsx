@@ -10,11 +10,8 @@ const DateSelect = ({ dateTime, id }) => {
   const [currentPage, setCurrentPage] = useState(0);
   const datesPerPage = 4;
 
-  // FIX: Sort dates properly so pagination works correctly
-  const dates = Object.keys(dateTime || {}).sort(
-    (a, b) => new Date(a) - new Date(b)
-  );
-
+  // Get array of dates from dateTime object
+  const dates = Object.keys(dateTime || {});
   const totalPages = Math.ceil(dates.length / datesPerPage);
 
   // Get current page dates
@@ -71,7 +68,6 @@ const DateSelect = ({ dateTime, id }) => {
           <p className='text-lg font-semibold mb-6'>Choose Date</p>
           
           <div className='flex items-center gap-4'>
-            
             {/* Previous Button */}
             <button
               onClick={handlePrevious}
@@ -119,7 +115,7 @@ const DateSelect = ({ dateTime, id }) => {
               <ChevronRightIcon width={28} height={28} />
             </button>
 
-            {/* Book Now Button */}
+            {/* Book Now Button - Same line as dates */}
             <button
               onClick={onBookHandler}
               className='ml-auto bg-primary text-white px-10 py-4 rounded-xl hover:bg-primary/90 transition-all cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed font-medium text-base'
