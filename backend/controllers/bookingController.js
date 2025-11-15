@@ -259,6 +259,31 @@ export const getOccupiedSeats = async(req, res) => {
     }
 }
 
+// NEW: Clean up orphaned seats (seats marked occupied but no booking exists)
+export const cleanupOrphanedSeats = async(req, res) => {
+    try {
+        // Use the static method from the Booking model
+        const result = await Booking.cleanupOrphanedSeats();
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: `Cleaned up ${result.cleanedSeats} orphaned seats`,
+                cleanedSeats: result.cleanedSeats
+            });
+        } else {
+            res.json({
+                success: false,
+                message: 'Error cleaning up orphaned seats',
+                error: result.error
+            });
+        }
+    } catch(err) {
+        console.log(err.message);
+        res.json({success: false, message: 'Error cleaning up orphaned seats'});
+    }
+}
+
 // Helper function to clean up expired bookings
 const cleanupExpiredBookings = async(showId, dateTimeKey) => {
     try {
@@ -303,5 +328,69 @@ const cleanupExpiredBookings = async(showId, dateTimeKey) => {
         }
     } catch (err) {
         console.log('Error cleaning up expired bookings:', err.message);
+    }
+}
+
+// NEW: Get user's bookings with automatic cleanup
+export const getMyBookings = async(req, res) => {
+    try {
+        const userId = req.auth?.userId;
+        
+        if (!userId) {
+            return res.json({success: false, message: 'User not authenticated'});
+        }
+
+        // Clean up expired bookings first
+        const now = new Date();
+        const expiredBookings = await Booking.find({
+            user: userId,
+            isPaid: false,
+            paymentStatus: 'pending',
+            expiresAt: { $lte: now }
+        });
+
+        // Release seats from expired bookings
+        for (const booking of expiredBookings) {
+            const show = await Show.findById(booking.show);
+            if (show) {
+                const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
+                
+                booking.bookedSeats.forEach((seat) => {
+                    delete occupiedSeatsForSlot[seat];
+                });
+                
+                show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
+                show.markModified('occupiedSeats');
+                await show.save();
+            }
+
+            // Mark as expired
+            booking.paymentStatus = 'expired';
+            booking.paymentLink = '';
+            await booking.save();
+        }
+
+        if (expiredBookings.length > 0) {
+            console.log(`✅ Cleaned up ${expiredBookings.length} expired bookings for user ${userId}`);
+        }
+
+        // Fetch all bookings
+        const bookings = await Booking.find({ user: userId })
+            .populate({
+                path: 'show',
+                populate: {
+                    path: 'movie'
+                }
+            })
+            .sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            bookings: bookings
+        });
+
+    } catch(err) {
+        console.log(err.message);
+        res.json({success: false, message: 'Error fetching bookings'});
     }
 }
