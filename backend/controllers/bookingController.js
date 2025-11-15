@@ -1,9 +1,9 @@
 import Booking from "../models/booking.js";
 import Show from "../models/show.js";
 import stripe from 'stripe';
-import { inngest } from '../inngest/index.js'; // Import inngest client
+import { inngest } from '../inngest/index.js';
 
-//function to check availability of selected seats
+// Function to check availability of selected seats
 const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
     try{
         const showData = await Show.findById(showId);
@@ -14,6 +14,11 @@ const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
         
         // Check if any selected seat is already taken
         const isAnySeatTaken = selectedSeats.some(seat => occupiedSeatsForSlot[seat]);
+        
+        if (isAnySeatTaken) {
+            console.log("❌ Some seats are already occupied:", selectedSeats.filter(seat => occupiedSeatsForSlot[seat]));
+        }
+        
         return !isAnySeatTaken;
     }catch(err){
         console.log(err.message);
@@ -113,6 +118,7 @@ export const adminDeleteBooking = async(req, res) => {
         res.json({success: false, message: 'Error deleting booking'});
     }
 }
+
 export const createBooking = async(req, res) => {
     try{
         const userId = req.auth?.userId;
@@ -128,23 +134,23 @@ export const createBooking = async(req, res) => {
             return res.json({success:false, message:'Missing required booking information'});
         }
         
-        // check the seat availability 
+        // Check the seat availability 
         const isAvailable = await checkSeatAvailability(showId, dateTimeKey, selectedSeats);
         if(!isAvailable){
             return res.json({success:false, message:'Selected seats are already booked. Please choose different seats.'});
         }
         
-        // get show details
+        // Get show details
         const showData = await Show.findById(showId).populate('movie');
         
         if(!showData){
             return res.json({success:false, message:'Show not found'});
         }
 
-        // ⭐ Set expiration to 5 minutes from now
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+        // Set expiration to 5 minutes from now
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-        //create a booking 
+        // Create a booking 
         const booking = await Booking.create({
             user: userId,
             show: showId,
@@ -166,13 +172,14 @@ export const createBooking = async(req, res) => {
         // Update the occupied seats for this specific slot
         showData.occupiedSeats.set(dateTimeKey, occupiedSeatsForSlot);
         showData.markModified('occupiedSeats');
-
         await showData.save();
+
+        console.log(`🎫 Created booking ${booking._id} with seats: ${selectedSeats.join(', ')}`);
 
         // Stripe gateway initialization
         const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
 
-        // creating line items
+        // Creating line items
         const line_items = [{
             price_data :{
                 currency : 'usd',
@@ -192,19 +199,18 @@ export const createBooking = async(req, res) => {
             metadata :{
                 bookingId : booking._id.toString(),
             },
-            expires_at : Math.floor(Date.now()/1000) + 30*60 //expires in 30 min
+            expires_at : Math.floor(Date.now()/1000) + 30*60
         })
         
         booking.paymentLink = session.url;
         await booking.save();
 
-        // ⭐ Schedule Inngest job to check payment after 5 minutes
+        // Schedule Inngest job to check payment after 5 minutes
         await inngest.send({
             name: "booking/payment.timeout",
             data: {
                 bookingId: booking._id.toString(),
             },
-            // Run this event after 5 minutes
             ts: expiresAt.getTime(),
         });
 
@@ -226,6 +232,9 @@ export const getOccupiedSeats = async(req, res) => {
             return res.json({success:false, message:'Date and time not specified'});
         }
         
+        // First, clean up expired bookings for this show and dateTimeKey
+        await cleanupExpiredBookings(showId, dateTimeKey);
+        
         const showData = await Show.findById(showId);
         
         if(!showData){
@@ -236,10 +245,63 @@ export const getOccupiedSeats = async(req, res) => {
         const occupiedSeatsForSlot = showData.occupiedSeats.get(dateTimeKey) || {};
         const occupiedSeats = Object.keys(occupiedSeatsForSlot);
         
-        res.json({success:true, message:'Occupied seats fetched successfully', occupiedSeats: occupiedSeats});
+        console.log(`🪑 Occupied seats for ${dateTimeKey}:`, occupiedSeats);
+        
+        res.json({
+            success:true, 
+            message:'Occupied seats fetched successfully', 
+            occupiedSeats: occupiedSeats
+        });
 
     }catch(err){
         console.log(err.message);
         res.json({success:false, message:'Error in fetching occupied seats'});
+    }
+}
+
+// Helper function to clean up expired bookings
+const cleanupExpiredBookings = async(showId, dateTimeKey) => {
+    try {
+        // Find all expired unpaid bookings for this show and time
+        const expiredBookings = await Booking.find({
+            show: showId,
+            dateTimeKey: dateTimeKey,
+            isPaid: false,
+            expiresAt: { $lte: new Date() }
+        });
+
+        if (expiredBookings.length > 0) {
+            console.log(`🧹 Found ${expiredBookings.length} expired bookings to clean up`);
+            
+            const show = await Show.findById(showId);
+            if (show) {
+                const occupiedSeatsForSlot = show.occupiedSeats.get(dateTimeKey) || {};
+                
+                // Release seats from all expired bookings
+                expiredBookings.forEach(booking => {
+                    booking.bookedSeats.forEach(seat => {
+                        delete occupiedSeatsForSlot[seat];
+                    });
+                });
+                
+                show.occupiedSeats.set(dateTimeKey, occupiedSeatsForSlot);
+                show.markModified('occupiedSeats');
+                await show.save();
+                
+                console.log(`✅ Released seats from expired bookings`);
+            }
+            
+            // Delete expired bookings
+            await Booking.deleteMany({
+                show: showId,
+                dateTimeKey: dateTimeKey,
+                isPaid: false,
+                expiresAt: { $lte: new Date() }
+            });
+            
+            console.log(`✅ Deleted ${expiredBookings.length} expired bookings`);
+        }
+    } catch (err) {
+        console.log('Error cleaning up expired bookings:', err.message);
     }
 }
