@@ -21,7 +21,8 @@ const syncUserCreation = inngest.createFunction(
 
     const userData = {
       _id: id,
-      name: `${first_name} ${last_name}`,
+      // ⭐ FIX: Handle null last names
+      name: [first_name, last_name].filter(Boolean).join(' '),
       email: email_addresses[0].email_address,
       image: image_url,
     };
@@ -50,7 +51,8 @@ const syncUserUpdation = inngest.createFunction(
     const { id, first_name, last_name, email_addresses, image_url } = event.data;
 
     const userData = {
-      name: `${first_name} ${last_name}`,
+      // ⭐ FIX: Handle null last names
+      name: [first_name, last_name].filter(Boolean).join(' '),
       email: email_addresses[0].email_address,
       image: image_url,
     };
@@ -148,8 +150,21 @@ const sendBookingConfirmationEmail = inngest.createFunction(
       }
 
       try {
-        // ⭐ FIX: Use booking.dateTimeKey to create a valid date
-        const showDate = new Date(booking.dateTimeKey);
+        // ⭐ FIX: Add defensive check for missing dateTimeKey
+        const showDate = booking.dateTimeKey ? new Date(booking.dateTimeKey) : null;
+        
+        // Log error if date is missing (helps you debug the root cause)
+        if (!showDate) {
+          console.error(`❌ CRITICAL: Booking ${bookingId} is missing dateTimeKey! Email will show 'Not Specified'.`);
+        }
+
+        const emailDate = showDate 
+          ? showDate.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' }) 
+          : 'Date Not Specified';
+          
+        const emailTime = showDate 
+          ? showDate.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
+          : 'Time Not Specified';
 
         await sendEmail({
           to: booking.user.email,
@@ -158,8 +173,8 @@ const sendBookingConfirmationEmail = inngest.createFunction(
             <h2>Hi ${booking.user.name},</h2>
             <p>Your booking for <strong style="color: #F84565;">"${booking.show.movie.title}"</strong> is confirmed.</p>
             <p>
-              <strong>Date:</strong> ${showDate.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' })}<br/>
-              <strong>Time:</strong> ${showDate.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })}
+              <strong>Date:</strong> ${emailDate}<br/>
+              <strong>Time:</strong> ${emailTime}
             </p>
             <p>Enjoy the show! 🍿</p>
             <p>Thanks for booking with us!<br/>- QuickShow Team</p>
