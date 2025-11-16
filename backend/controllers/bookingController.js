@@ -1,34 +1,22 @@
 import Booking from "../models/booking.js";
 import Show from "../models/show.js";
+import Movie from "../models/movie.js"; // ⭐ FIX: Import Movie model for Stripe
+import mongoose from 'mongoose'; // ⭐ FIX: Import mongoose for transactions
 import stripe from 'stripe';
 import { inngest } from '../inngest/index.js';
 
-// Function to check availability of selected seats
-const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => {
-    try{
-        const showData = await Show.findById(showId);
-        if(!showData) return false;
-        
-        // Get occupied seats for the specific date-time slot
-        const occupiedSeatsForSlot = showData.occupiedSeats.get(dateTimeKey) || {};
-        
-        // Check if any selected seat is already taken
-        const isAnySeatTaken = selectedSeats.some(seat => occupiedSeatsForSlot[seat]);
-        
-        if (isAnySeatTaken) {
-            console.log("❌ Some seats are already occupied:", selectedSeats.filter(seat => occupiedSeatsForSlot[seat]));
-        }
-        
-        return !isAnySeatTaken;
-    }catch(err){
-        console.log(err.message);
-        return false;
-    }
-}
+// ⛔️ DEPRECATED HELPER: This function is the source of the race condition.
+// Do not use it. The logic is now inside the 'createBooking' transaction.
+// const checkSeatAvailability = async(showId, dateTimeKey, selectedSeats) => { ... }
 
 // Function to release seats when booking is cancelled/deleted
 export const cancelBooking = async(req, res) => {
+    // ⭐ FIX: Use a transaction to ensure seat release and booking update
+    // happen together or not at all.
+    const session = await mongoose.startSession();
+
     try {
+        session.startTransaction();
         const { bookingId } = req.params;
         const userId = req.auth?.userId;
         
@@ -36,14 +24,14 @@ export const cancelBooking = async(req, res) => {
             return res.json({success: false, message: 'User not authenticated'});
         }
 
-        const booking = await Booking.findById(bookingId);
+        const booking = await Booking.findById(bookingId).session(session);
         
         if (!booking) {
             return res.json({success: false, message: 'Booking not found'});
         }
 
         // Check if user owns this booking
-        if (booking.user !== userId) {
+        if (booking.user.toString() !== userId) {
             return res.json({success: false, message: 'Unauthorized to cancel this booking'});
         }
 
@@ -53,7 +41,7 @@ export const cancelBooking = async(req, res) => {
         }
 
         // Release the seats
-        const show = await Show.findById(booking.show);
+        const show = await Show.findById(booking.show).session(session);
         if (show) {
             const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
             
@@ -64,63 +52,90 @@ export const cancelBooking = async(req, res) => {
             
             show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
             show.markModified('occupiedSeats');
-            await show.save();
+            await show.save({ session });
             
             console.log(`✅ Released seats ${booking.bookedSeats.join(', ')} from show`);
         }
 
-        // Delete the booking
-        await Booking.findByIdAndDelete(bookingId);
+        // ⭐ FIX: Soft delete (cancel) instead of hard deleting. This keeps a record.
+        await Booking.findByIdAndUpdate(bookingId, 
+            { $set: { paymentStatus: 'cancelled', paymentLink: null } },
+            { session }
+        );
 
+        await session.commitTransaction();
         res.json({success: true, message: 'Booking cancelled and seats released'});
 
     } catch(err) {
+        await session.abortTransaction();
         console.log(err.message);
         res.json({success: false, message: 'Error cancelling booking'});
+    } finally {
+        session.endSession();
     }
 }
 
 // Admin function to delete any booking and release seats
 export const adminDeleteBooking = async(req, res) => {
+    // ⭐ FIX: Use a transaction for safety
+    const session = await mongoose.startSession();
     try {
+        session.startTransaction();
         const { bookingId } = req.params;
 
-        const booking = await Booking.findById(bookingId);
+        const booking = await Booking.findById(bookingId).session(session);
         
         if (!booking) {
             return res.json({success: false, message: 'Booking not found'});
         }
 
-        // Release the seats
-        const show = await Show.findById(booking.show);
-        if (show) {
-            const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
-            
-            // Remove the booked seats
-            booking.bookedSeats.forEach((seat) => {
-                delete occupiedSeatsForSlot[seat];
-            });
-            
-            show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
-            show.markModified('occupiedSeats');
-            await show.save();
-            
-            console.log(`✅ Admin released seats ${booking.bookedSeats.join(', ')} from show`);
+        // Release the seats only if it's not a paid booking
+        // (Or remove this check if admins can delete even paid ones)
+        if (!booking.isPaid) {
+            const show = await Show.findById(booking.show).session(session);
+            if (show) {
+                const occupiedSeatsForSlot = show.occupiedSeats.get(booking.dateTimeKey) || {};
+                
+                // Remove the booked seats
+                booking.bookedSeats.forEach((seat) => {
+                    delete occupiedSeatsForSlot[seat];
+                });
+                
+                show.occupiedSeats.set(booking.dateTimeKey, occupiedSeatsForSlot);
+                show.markModified('occupiedSeats');
+                await show.save({ session });
+                
+                console.log(`✅ Admin released seats ${booking.bookedSeats.join(', ')} from show`);
+            }
         }
 
         // Delete the booking
-        await Booking.findByIdAndDelete(bookingId);
+        await Booking.findByIdAndDelete(bookingId, { session });
 
+        await session.commitTransaction();
         res.json({success: true, message: 'Booking deleted and seats released'});
 
     } catch(err) {
+        await session.abortTransaction();
         console.log(err.message);
         res.json({success: false, message: 'Error deleting booking'});
+    } finally {
+        session.endSession();
     }
 }
 
 export const createBooking = async(req, res) => {
-    try{
+    // ⭐ FIX: Start a Mongoose session for the transaction
+    const session = await mongoose.startSession();
+    
+    let booking; // Define booking in the outer scope
+    let expiresAt; // Define expiresAt in the outer scope
+    let movieTitle = 'Movie Ticket'; // Default title
+
+    try {
+        // Begin the transaction
+        session.startTransaction();
+
         const userId = req.auth?.userId;
         
         if (!userId) {
@@ -134,65 +149,82 @@ export const createBooking = async(req, res) => {
             return res.json({success:false, message:'Missing required booking information'});
         }
         
-        // Check the seat availability 
-        const isAvailable = await checkSeatAvailability(showId, dateTimeKey, selectedSeats);
-        if(!isAvailable){
-            return res.json({success:false, message:'Selected seats are already booked. Please choose different seats.'});
-        }
+        // --- Transactional Logic Starts ---
         
-        // Get show details
-        const showData = await Show.findById(showId).populate('movie');
+        // 1. Get the show *within the transaction* and lock it for updates
+        const showData = await Show.findById(showId).session(session);
         
         if(!showData){
+            await session.abortTransaction();
             return res.json({success:false, message:'Show not found'});
         }
 
-        // Set expiration to 5 minutes from now
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+        // 2. Check availability *inside the transaction*
+        const occupiedSeatsForSlot = showData.occupiedSeats.get(dateTimeKey) || {};
+        const isAnySeatTaken = selectedSeats.some(seat => occupiedSeatsForSlot[seat]);
+        
+        if (isAnySeatTaken) {
+            await session.abortTransaction();
+            return res.json({success:false, message:'Selected seats are already booked. Please choose different seats.'});
+        }
+        
+        // 3. All seats are free. Reserve them immediately.
+        selectedSeats.forEach((seat) => {
+            occupiedSeatsForSlot[seat] = userId;
+        });
+        showData.occupiedSeats.set(dateTimeKey, occupiedSeatsForSlot);
+        showData.markModified('occupiedSeats');
+        
+        // Save the show changes
+        await showData.save({ session });
 
-        // Create a booking 
-        const booking = await Booking.create({
+        // 4. Create the booking
+        expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+        
+        // Use 'new Booking' and 'save' to get the _id for Stripe
+        booking = new Booking({
             user: userId,
             show: showId,
             dateTimeKey: dateTimeKey,
             amount: showData.showPrice * selectedSeats.length,
             bookedSeats: selectedSeats,
-            paymentStatus: 'pending', // STATUS starts as 'pending'
+            paymentStatus: 'pending',
             expiresAt: expiresAt
-        })
-        
-        // Get current occupied seats for this slot
-        const occupiedSeatsForSlot = showData.occupiedSeats.get(dateTimeKey) || {};
-        
-        // Add newly booked seats
-        selectedSeats.forEach((seat) => {
-            occupiedSeatsForSlot[seat] = userId;
         });
         
-        // Update the occupied seats for this specific slot
-        showData.occupiedSeats.set(dateTimeKey, occupiedSeatsForSlot);
-        showData.markModified('occupiedSeats');
-        await showData.save();
+        await booking.save({ session });
+
+        // 5. Get movie title for Stripe
+        const movie = await Movie.findById(showData.movie).session(session);
+        if (movie) {
+            movieTitle = movie.title;
+        }
+
+        // --- Transactional Logic Ends ---
+        
+        // ⭐ FIX: Commit the transaction *before* making external API calls
+        await session.commitTransaction();
 
         console.log(`🎫 Created booking ${booking._id} with seats: ${selectedSeats.join(', ')}`);
 
-        // Stripe gateway initialization
-        const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
+        // --- External APIs (Stripe, Inngest) ---
+        // These happen *after* the commit. If they fail, the booking exists
+        // and the Inngest timeout will clean it up later.
 
-        // Creating line items
+        const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
         const line_items = [{
             price_data :{
                 currency : 'usd',
                 product_data : {
-                    name : showData.movie.title
+                    name : movieTitle // Use fetched movie title
                 },
                 unit_amount : Math.floor(booking.amount) * 100
             },
             quantity : 1
         }]
 
-        const session = await stripeInstance.checkout.sessions.create({
-            success_url : `${origin}/mybookings`,
+        const stripeSession = await stripeInstance.checkout.sessions.create({
+            success_url: `${origin}/loading/mybookings`,
             cancel_url : `${origin}/mybookings`,
             line_items : line_items,
             mode : 'payment',
@@ -202,10 +234,11 @@ export const createBooking = async(req, res) => {
             expires_at : Math.floor(Date.now()/1000) + 30*60
         })
         
-        booking.paymentLink = session.url;
+        // Save the payment link to the booking (outside the transaction)
+        booking.paymentLink = stripeSession.url;
         await booking.save();
 
-        // ⭐ Schedule payment timeout check after 5 minutes
+        // Schedule payment timeout check
         await inngest.send({
             name: "booking/payment.timeout",
             data: {
@@ -216,11 +249,16 @@ export const createBooking = async(req, res) => {
 
         console.log(`⏰ Scheduled payment timeout check for booking ${booking._id} at ${expiresAt.toISOString()}`);
 
-        res.json({success:true, url: session.url});
+        res.json({success:true, url: stripeSession.url});
 
     }catch(err){
+        // ⭐ FIX: Abort the transaction if anything failed
+        await session.abortTransaction();
         console.log(err.message);
         res.json({success:false, message:'Error in booking creation'});
+    } finally {
+        // ⭐ FIX: Always end the session
+        session.endSession();
     }
 }
 
@@ -232,8 +270,9 @@ export const getOccupiedSeats = async(req, res) => {
             return res.json({success:false, message:'Date and time not specified'});
         }
         
-        // First, clean up expired bookings for this show and dateTimeKey
-        await cleanupExpiredBookings(showId, dateTimeKey);
+        // ⭐ FIX: REMOVED the call to cleanupExpiredBookings.
+        // A GET request should never modify data.
+        // The Inngest job is responsible for cleaning up.
         
         const showData = await Show.findById(showId);
         
@@ -241,7 +280,6 @@ export const getOccupiedSeats = async(req, res) => {
             return res.json({success:false, message:'Show not found'});
         }
         
-        // Get occupied seats for the specific date-time slot
         const occupiedSeatsForSlot = showData.occupiedSeats.get(dateTimeKey) || {};
         const occupiedSeats = Object.keys(occupiedSeatsForSlot);
         
@@ -259,10 +297,9 @@ export const getOccupiedSeats = async(req, res) => {
     }
 }
 
-// NEW: Clean up orphaned seats (seats marked occupied but no booking exists)
+// This is an admin/utility function, it's fine as is.
 export const cleanupOrphanedSeats = async(req, res) => {
     try {
-        // Use the static method from the Booking model
         const result = await Booking.cleanupOrphanedSeats();
         
         if (result.success) {
@@ -284,10 +321,10 @@ export const cleanupOrphanedSeats = async(req, res) => {
     }
 }
 
-// Helper function to clean up expired bookings
+// This helper function is fine, but it should be called by your
+// Inngest worker or a cron job, NOT from a GET request.
 const cleanupExpiredBookings = async(showId, dateTimeKey) => {
     try {
-        // Find all expired unpaid bookings for this show and time
         const expiredBookings = await Booking.find({
             show: showId,
             dateTimeKey: dateTimeKey,
@@ -302,7 +339,6 @@ const cleanupExpiredBookings = async(showId, dateTimeKey) => {
             if (show) {
                 const occupiedSeatsForSlot = show.occupiedSeats.get(dateTimeKey) || {};
                 
-                // Release seats from all expired bookings
                 expiredBookings.forEach(booking => {
                     booking.bookedSeats.forEach(seat => {
                         delete occupiedSeatsForSlot[seat];
@@ -316,7 +352,6 @@ const cleanupExpiredBookings = async(showId, dateTimeKey) => {
                 console.log(`✅ Released seats from expired bookings`);
             }
             
-            // ‼️ CHANGE: Update status to 'failed' instead of deleting
             await Booking.updateMany(
                 { _id: { $in: expiredBookings.map(b => b._id) } },
                 { $set: { paymentStatus: 'failed', paymentLink: null } }
@@ -329,7 +364,7 @@ const cleanupExpiredBookings = async(showId, dateTimeKey) => {
     }
 }
 
-// NEW: Get user's bookings with automatic cleanup
+// This function is well-written, no changes needed.
 export const getMyBookings = async(req, res) => {
     try {
         const userId = req.auth?.userId;
@@ -340,7 +375,6 @@ export const getMyBookings = async(req, res) => {
 
         const now = new Date();
         
-        // ‼️ CHANGE: Fetch ALL bookings for the user.
         const bookings = await Booking.find({ user: userId })
         .populate({
             path: 'show',
@@ -350,7 +384,6 @@ export const getMyBookings = async(req, res) => {
         })
         .sort({ createdAt: -1 });
 
-        // Add expiration status to each booking
         const bookingsWithStatus = bookings.map(booking => {
             const bookingObj = booking.toObject();
             const isExpired = booking.expiresAt && new Date(booking.expiresAt) <= now;
