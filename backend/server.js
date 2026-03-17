@@ -16,16 +16,25 @@ const port = 3000;
 
 await connectDB();
 
-// ⭐ MUST BE FIRST
+// ⭐ Stripe webhook (correct)
 app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
   stripeWebhooks
 );
 
-// ⭐ all other middleware must come AFTER
+// ⭐ CORS FIX (ADD HERE)
+app.use(cors({
+  origin: "https://quickshow-iota-mocha.vercel.app",
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
+app.options("*", cors());
+
+// ⭐ other middleware
 app.use(express.json());
-app.use(cors());
 app.use(clerkMiddleware());
 
 app.get('/', (req, res) => {
