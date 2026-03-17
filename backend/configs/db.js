@@ -8,6 +8,10 @@ const connectDB = async () => {
     return;
   }
 
+  if (!process.env.MONGODB_URI) {
+    throw new Error('MONGODB_URI environment variable is not set');
+  }
+
   try {
     await mongoose.connect(process.env.MONGODB_URI, {
       dbName: 'quickshow',
@@ -16,7 +20,7 @@ const connectDB = async () => {
     console.log('✅ Database connected successfully');
   } catch (err) {
     console.error('❌ Database connection failed:', err.message);
-    throw err; // ✅ DO THIS INSTEAD
+    throw err;
   }
 };
 

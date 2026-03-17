@@ -13,7 +13,7 @@ import { stripeWebhooks } from './controllers/stripeWebhooks.js';
 
 const app = express();
 
-// ✅ CORS (FIXED)
+// CORS
 app.use(cors({
   origin: "https://quickshow-iota-mocha.vercel.app",
   credentials: true,
@@ -23,42 +23,47 @@ app.use(cors({
 
 app.options("*", cors());
 
-// ✅ Stripe webhook (must be BEFORE express.json)
+// Stripe webhook (must be BEFORE express.json)
 app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
   stripeWebhooks
 );
 
-// ✅ JSON parser
+// JSON parser
 app.use(express.json());
 
-// ✅ DB connection middleware (FIXED for Vercel)
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (error) {
-    console.error("DB Error:", error);
-    return res.status(500).send("Database connection failed");
-  }
-});
-
-// ✅ Clerk auth
+// Clerk auth
 app.use(clerkMiddleware());
 
-// ✅ Test route
+// Test route
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// ✅ Routes
+// Debug route - remove after fixing
+app.get('/debug-env', (req, res) => {
+  res.send({
+    hasMongoURI: !!process.env.MONGODB_URI,
+    starts: process.env.MONGODB_URI?.substring(0, 30)
+  });
+});
+
+// Routes
 app.use('/api/inngest', serve({ client: inngest, functions }));
 app.use('/api/show', showRouter);
 app.use('/api/booking', bookingRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/user', userRouter);
 
-// ❌ REMOVE app.listen (IMPORTANT)
-// ✅ Export for Vercel
+// Connect DB then start
+connectDB()
+  .then(() => {
+    console.log('✅ DB connected, server ready');
+  })
+  .catch((err) => {
+    console.error('❌ Failed to connect to DB:', err.message);
+    process.exit(1);
+  });
+
 export default app;
