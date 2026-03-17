@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-let isConnected = false; //Prevent multiple connections
+let isConnected = false;
 
 const connectDB = async () => {
   if (isConnected) {
@@ -10,13 +10,13 @@ const connectDB = async () => {
 
   try {
     await mongoose.connect(process.env.MONGODB_URI, {
-      dbName: 'quickshow', // ✅ database name
+      dbName: 'quickshow',
     });
     isConnected = true;
     console.log('✅ Database connected successfully');
   } catch (err) {
     console.error('❌ Database connection failed:', err.message);
-    process.exit(1);
+    throw err; // ✅ DO THIS INSTEAD
   }
 };
 
