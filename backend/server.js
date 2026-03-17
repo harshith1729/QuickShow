@@ -21,7 +21,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-app.options("*", cors());
+app.options("/(.*)", cors());
 
 // Stripe webhook (must be BEFORE express.json)
 app.post(
